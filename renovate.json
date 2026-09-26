@@ -1,0 +1,44 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "schedule": ["before 6am on monday"],
+  "separateMajorMinor": false,
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Lead's commit on main, from the comment above ARG LEAD_COMMIT",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) packageName=(?<packageName>\\S+) branch=(?<currentValue>\\S+)\\nARG LEAD_COMMIT=(?<currentDigest>[0-9a-f]{40})"
+      ]
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "One weekly pull request, so one rebuild, automerged once the smoke test passes on both architectures",
+      "matchPackageNames": ["*"],
+      "groupName": "weekly updates",
+      "groupSlug": "weekly",
+      "automerge": true
+    },
+    {
+      "description": "Pin the Postgres base by its multi-arch index digest",
+      "matchManagers": ["dockerfile"],
+      "pinDigests": true
+    },
+    {
+      "description": "A new Postgres major needs the Dockerfile's pg18 names changed by hand, so it gets its own pull request and never automerges",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["postgres"],
+      "matchUpdateTypes": ["major"],
+      "groupName": "Postgres major",
+      "groupSlug": "postgres-major",
+      "automerge": false
+    },
+    {
+      "description": "The runner images are a choice, not a dependency, and the matrix labels are out of Renovate's reach, so it would move only some of them",
+      "matchDatasources": ["github-runners"],
+      "enabled": false
+    }
+  ]
+}
