@@ -41,7 +41,7 @@ Every Monday, Renovate checks the Postgres base image, the Lead commit, and the 
 
 ## License and source
 
-Lead is licensed `AGPL-3.0-or-later` by PlanetScale. The image contains Lead compiled, unmodified, from the commit named by `LEAD_COMMIT` in the [`Dockerfile`](Dockerfile).
+Lead is licensed `AGPL-3.0-only` by PlanetScale. The image contains Lead compiled, unmodified, from the commit named by `LEAD_COMMIT` in the [`Dockerfile`](Dockerfile).
 
 The Corresponding Source for that object code is:
 

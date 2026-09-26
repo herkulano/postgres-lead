@@ -79,7 +79,7 @@ ARG LEAD_COMMIT
 
 # The workflow adds `org.opencontainers.image.revision` with this repository's commit.
 LABEL org.opencontainers.image.source="https://github.com/herkulano/postgres-lead" \
-	org.opencontainers.image.licenses="AGPL-3.0-or-later AND PostgreSQL" \
+	org.opencontainers.image.licenses="AGPL-3.0-only AND PostgreSQL" \
 	org.opencontainers.image.description="Postgres 18 with PlanetScale's Lead, a non-production TIN-compatible text-search extension" \
 	io.github.herkulano.postgres-lead.lead-commit="$LEAD_COMMIT"
 
