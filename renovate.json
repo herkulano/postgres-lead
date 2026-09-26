@@ -3,6 +3,7 @@
   "extends": ["config:recommended"],
   "schedule": ["before 6am on monday"],
   "separateMajorMinor": false,
+  "platformAutomerge": false,
   "customManagers": [
     {
       "customType": "regex",
@@ -25,6 +26,12 @@
       "description": "Pin the Postgres base by its multi-arch index digest",
       "matchManagers": ["dockerfile"],
       "pinDigests": true
+    },
+    {
+      "description": "Keep Postgres minors coming while a major waits, since without this Renovate offers only the newest release",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["postgres"],
+      "separateMajorMinor": true
     },
     {
       "description": "A new Postgres major needs the Dockerfile's pg18 names changed by hand, so it gets its own pull request and never automerges",
