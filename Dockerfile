@@ -11,7 +11,11 @@
 
 # Lead publishes no tag and no release, so the source is pinned by commit on `main`.
 # renovate: datasource=git-refs depName=lead packageName=https://github.com/planetscale/lead branch=main
-ARG LEAD_COMMIT=6007456d659dc83411bb177385d16921f07391e4
+ARG LEAD_COMMIT=bd95c7e51b6afce81396790852ee2f2c169570ad
+# Lead's license at that commit, as its `Cargo.toml` declares it. The build fails when the
+# two disagree, so a relicensing Lead bump stops for a person to update this, the README,
+# and the label below, rather than automerging.
+ARG LEAD_LICENSE=AGPL-3.0-or-later
 
 # The Debian variant, because the Alpine one deletes its build toolchain and no source
 # states that Lead builds against musl. Both stages name one base, pinned by its multi-arch
@@ -20,6 +24,7 @@ ARG LEAD_COMMIT=6007456d659dc83411bb177385d16921f07391e4
 FROM postgres:18.6-trixie@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722 AS builder
 
 ARG LEAD_COMMIT
+ARG LEAD_LICENSE
 
 # `postgresql-server-dev-18` carries the headers and the `pg_config` that pgrx targets.
 # clang and libclang are what pgrx runs bindgen with.
@@ -47,6 +52,9 @@ RUN git clone --filter=blob:none https://github.com/planetscale/lead.git /lead \
 	&& git -C /lead checkout "$LEAD_COMMIT"
 
 WORKDIR /lead
+
+RUN grep -Fqx "license = \"$LEAD_LICENSE\"" Cargo.toml \
+	|| { echo "Lead's Cargo.toml no longer declares $LEAD_LICENSE:" >&2; grep -n '^license' Cargo.toml >&2; exit 1; }
 
 # Installs the toolchain `rust-toolchain.toml` names, so every later cargo call uses it.
 RUN rustup toolchain install
@@ -76,10 +84,11 @@ RUN cargo pgrx package \
 FROM postgres:18.6-trixie@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722
 
 ARG LEAD_COMMIT
+ARG LEAD_LICENSE
 
 # The workflow adds `org.opencontainers.image.revision` with this repository's commit.
 LABEL org.opencontainers.image.source="https://github.com/herkulano/postgres-lead" \
-	org.opencontainers.image.licenses="AGPL-3.0-only AND PostgreSQL" \
+	org.opencontainers.image.licenses="$LEAD_LICENSE AND PostgreSQL" \
 	org.opencontainers.image.description="Postgres 18 with PlanetScale's Lead, a non-production TIN-compatible text-search extension" \
 	io.github.herkulano.postgres-lead.lead-commit="$LEAD_COMMIT"
 
