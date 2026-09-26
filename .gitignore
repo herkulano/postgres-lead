@@ -14,17 +14,33 @@
 .claude/checkpoints/
 .claude/scheduled_tasks.*
 
-# Secrets and overrides for running the image locally, e.g. with Docker Compose.
+# Secrets. Commit an example with placeholder values instead.
 .env
 .env.*
 !.env.example
+*.pem
+*.key
 compose.override.yaml
 docker-compose.override.yml
 
-# OS and editor files.
-.DS_Store
-Thumbs.db
-*~
-*.swp
+# Dependencies, logs, and scratch files from `npx` and the tools the scripts call.
+node_modules/
+*.log
+npm-debug.log*
+tmp/
+*.tmp
+
+# Editors.
 .idea/
-.vscode/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+*.swo
+*~
+
+# Operating systems.
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
