@@ -1,0 +1,231 @@
+name: Image
+
+# Builds the Postgres image that carries Lead, PlanetScale's TIN-compatible text-search
+# extension. The build compiles Lead from Rust source and takes about fifteen minutes
+# cold, so it runs only when the Dockerfile or this workflow moves, or when someone asks
+# for it. A pull request builds and smoke-tests both architectures and pushes nothing. A
+# push to `main`, or a dispatch on `main`, also publishes.
+on:
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - ".github/workflows/image.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - ".github/workflows/image.yml"
+  workflow_dispatch:
+
+# A newer commit on a pull request supersedes its running build. Publishing runs one at a
+# time and never cancels, so a tag never points at a half-joined index.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('image-pr-{0}', github.event.number) || 'image-publish' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/herkulano/postgres-lead
+  # Only `main` publishes. A dispatch on any other branch builds and tests, like a pull
+  # request.
+  PUBLISH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+
+jobs:
+  # The tag is the Postgres version of the base, read from the Dockerfile, so a Lead bump
+  # keeps the tag and moves its digest, and a Postgres bump produces a new tag.
+  meta:
+    name: "🐘 Image (tag)"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - id: tag
+        name: Read the tag from the base image
+        run: |
+          # Both stages must name one base, or the builder compiles against headers the
+          # runtime does not carry.
+          bases="$(sed -n 's/^FROM \(postgres:[^ ]*\).*/\1/p' Dockerfile | sort -u)"
+          if [ "$(printf '%s\n' "$bases" | wc -l)" -ne 1 ]; then
+            echo "::error file=Dockerfile::The FROM lines name different bases: ${bases//$'\n'/, }"
+            exit 1
+          fi
+          tag="$(printf '%s\n' "$bases" | sed -E 's/^postgres:([0-9]+\.[0-9]+)-.*/\1/')"
+          if ! [[ "$tag" =~ ^[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=Dockerfile::Cannot read a Postgres version from ${bases}"
+            exit 1
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+  # One job per architecture, each on a runner of that architecture. Compiling Lead under
+  # QEMU costs hours, so no job emulates the other's platform. Each builds and smoke-tests
+  # its image; on `main` it then pushes the image with no tag and reports its digest, and
+  # `manifest` joins the two.
+  build:
+    name: "🐘 Image (${{ matrix.arch }})"
+    needs: [meta]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          # arm64 for an Apple Silicon Mac, which otherwise emulates the x64 image.
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      # GITHUB_TOKEN pushes to GHCR, so this workflow needs no secret. A pull request
+      # never reaches the steps that use it.
+      packages: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@v4.4.1
+
+      # Loads the image into the runner's Docker so the smoke test can start it. Nothing
+      # leaves the runner here.
+      - name: Build
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: postgres-lead:smoke
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          # BuildKit's GitHub Actions cache, so a run that changes nothing about the
+          # build reuses every layer and only a Dockerfile change pays the compile.
+          # The scope keeps one architecture's layers out of the other's cache.
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      # Starts the image, loads Lead, and runs one indexed search. The seq scan is off so
+      # the query goes through the `tin` index, as Lead's own tests do.
+      - name: Smoke test
+        run: |
+          docker run --detach --name smoke --env POSTGRES_PASSWORD=smoke postgres-lead:smoke
+          trap 'docker logs smoke' ERR
+          # TCP, because the entrypoint's first-boot server listens only on the socket,
+          # so a socket check would pass before the real server starts.
+          for _ in $(seq 60); do
+            docker exec smoke pg_isready --host 127.0.0.1 --username postgres && break
+            sleep 1
+          done
+          docker exec smoke pg_isready --host 127.0.0.1 --username postgres
+          docker exec smoke test -s /usr/share/doc/lead/LICENSE
+          result="$(docker exec --interactive smoke psql --username postgres \
+            --quiet --no-align --tuples-only --set ON_ERROR_STOP=1 <<'SQL'
+          CREATE EXTENSION tin;
+          CREATE TABLE smoke (id int, body text);
+          INSERT INTO smoke VALUES (1, 'craft beer'), (2, 'wine'), (3, 'beer festival');
+          CREATE INDEX smoke_body_idx ON smoke USING tin (body);
+          SET enable_seqscan = off;
+          SELECT array_agg(id ORDER BY id) FROM smoke WHERE body ==> 'beer';
+          SQL
+          )"
+          echo "Result: ${result}"
+          if [ "$result" != "{1,3}" ]; then
+            echo "::error::Expected {1,3} from the ==> query, got ${result}"
+            docker logs smoke
+            exit 1
+          fi
+
+      - if: env.PUBLISH == 'true'
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The same build again, now pushed. Every layer comes from the build above, so this
+      # only exports what the smoke test just passed.
+      - id: push
+        if: env.PUBLISH == 'true'
+        name: Push by digest
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          # `push-by-digest` pushes the image without a tag. Tagging here would make
+          # each architecture overwrite the other under one name.
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+
+      # An artifact is the only channel a matrix job has to the job that joins the
+      # results. The digest is the file name; the file itself stays empty.
+      - name: Export the digest
+        if: env.PUBLISH == 'true'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+
+      - if: env.PUBLISH == 'true'
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  manifest:
+    name: "🐘 Image (manifest)"
+    needs: [meta, build]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    env:
+      TAG: ${{ needs.meta.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v4.4.1
+
+      - uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The tag points at an index holding both architectures, so a pull resolves to the
+      # one the host runs.
+      - name: Create the index
+        working-directory: /tmp/digests
+        run: |
+          references=()
+          for digest in *; do references+=("${IMAGE}@sha256:${digest}"); done
+          docker buildx imagetools create --tag "${IMAGE}:${TAG}" "${references[@]}"
+
+      # Consumers pin this image by tag and digest, because the tag moves whenever Lead
+      # does. Print the full string where the person doing the bump can copy it, rather
+      # than making them open the package page. This is the index's own digest, which is
+      # what resolves per architecture.
+      - name: Report the digest
+        run: |
+          digest="$(docker buildx imagetools inspect "${IMAGE}:${TAG}" --format '{{.Manifest.Digest}}')"
+          {
+            echo "Pin this index, which covers linux/amd64 and linux/arm64:"
+            echo
+            echo '```'
+            echo "${IMAGE}:${TAG}@${digest}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,46 @@
+# Per-machine and per-person files. Anything named `*.local.*` or `*.local` stays out of
+# git: `.conductor/settings.local.toml`, `.claude/settings.local.json`, `CLAUDE.local.md`,
+# `compose.local.yaml`, `.env.local`, and the like. Their shared counterparts are committed.
+*.local.*
+*.local
+
+# Conductor. `.context` is the workspace's scratch space shared between agents. The shared
+# `.conductor/settings.toml` is committed.
+.context/
+
+# Claude Code's runtime state. The shared `.claude/settings.json`, `.claude/skills/`, and
+# `CLAUDE.md` are committed.
+.claude/worktrees/
+.claude/checkpoints/
+.claude/scheduled_tasks.*
+
+# Secrets. Commit an example with placeholder values instead.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+compose.override.yaml
+docker-compose.override.yml
+
+# Dependencies, logs, and scratch files from `npx` and the tools the scripts call.
+node_modules/
+*.log
+npm-debug.log*
+tmp/
+*.tmp
+
+# Editors.
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+*.swo
+*~
+
+# Operating systems.
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
